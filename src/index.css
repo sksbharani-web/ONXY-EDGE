@@ -1,0 +1,52 @@
+@import url('https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&family=JetBrains+Mono:wght@400;500;700&display=swap');
+@import "tailwindcss";
+
+@custom-variant dark (&:where(.dark, .dark *));
+
+@theme {
+  --font-sans: "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", ui-monospace, SFMono-Regular, monospace;
+}
+
+@layer base {
+  body {
+    @apply bg-slate-950 text-slate-50 font-sans antialiased;
+  }
+}
+
+/* Custom Scrollbar for technical feel */
+::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+
+::-webkit-scrollbar-track {
+  @apply bg-slate-900;
+}
+
+::-webkit-scrollbar-thumb {
+  @apply bg-slate-700 rounded-full;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  @apply bg-slate-600;
+}
+
+/* Hide Clerk developer mode badge */
+.cl-internal-b3fm6y,
+[data-testid="development-mode-badge"],
+.cl-dev-mode-badge {
+  display: none !important;
+}
+
+/* Hide Clerk footer / powered-by */
+.cl-footer,
+.cl-footerAction,
+.cl-internal-1otqm0c {
+  display: none !important;
+}
+
+/* Smooth scroll for intro page */
+html {
+  scroll-behavior: smooth;
+}

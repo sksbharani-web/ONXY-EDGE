@@ -1,0 +1,112 @@
+{
+  "entities": {
+    "User": {
+      "title": "User Profile",
+      "description": "Stores user profile information.",
+      "type": "object",
+      "properties": {
+        "uid": {
+          "type": "string",
+          "description": "Unique identifier for the user, matching Firebase Auth UID."
+        },
+        "email": {
+          "type": "string",
+          "format": "email",
+          "description": "User's email address."
+        },
+        "displayName": {
+          "type": "string",
+          "description": "User's display name."
+        },
+        "createdAt": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp when the user profile was created."
+        },
+        "lastLogin": {
+          "type": "string",
+          "format": "date-time",
+          "description": "Timestamp of the last login."
+        }
+      },
+      "required": [
+        "uid",
+        "email"
+      ]
+    },
+    "EnergyReading": {
+      "title": "Energy Reading",
+      "description": "A single energy reading from the monitoring device.",
+      "type": "object",
+      "properties": {
+        "voltage": {
+          "type": "number",
+          "description": "Voltage in Volts."
+        },
+        "current": {
+          "type": "number",
+          "description": "Current in Amperes."
+        },
+        "power": {
+          "type": "number",
+          "description": "Power in Watts."
+        },
+        "energy": {
+          "type": "number",
+          "description": "Total energy consumption in kWh."
+        },
+        "frequency": {
+          "type": "number",
+          "description": "Frequency in Hz."
+        },
+        "powerFactor": {
+          "type": "number",
+          "description": "Power factor (0-1)."
+        },
+        "timestamp": {
+          "type": "number",
+          "description": "Unix timestamp of the reading."
+        },
+        "isOn": {
+          "type": "boolean",
+          "description": "Relay state at the time of reading."
+        }
+      },
+      "required": [
+        "voltage",
+        "current",
+        "power",
+        "energy",
+        "timestamp"
+      ]
+    },
+    "ControlState": {
+      "title": "Control State",
+      "description": "Current state of the control relay.",
+      "type": "object",
+      "properties": {
+        "isOn": {
+          "type": "boolean",
+          "description": "Whether the relay is ON or OFF."
+        }
+      },
+      "required": [
+        "isOn"
+      ]
+    }
+  },
+  "firestore": {
+    "users/{userId}": {
+      "schema": "User",
+      "description": "Collection of user profiles, keyed by User ID."
+    },
+    "readings/{readingId}": {
+      "schema": "EnergyReading",
+      "description": "Collection of energy readings."
+    },
+    "control/{controlId}": {
+      "schema": "ControlState",
+      "description": "Collection for control state (specifically 'systemState' document)."
+    }
+  }
+}

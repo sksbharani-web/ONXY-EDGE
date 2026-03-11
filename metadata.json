@@ -1,0 +1,5 @@
+{
+  "name": "ONXY EDGE - Energy Monitor",
+  "description": "Real-time energy monitoring dashboard with AI predictions, historical analytics, and remote control capabilities.",
+  "requestFramePermissions": []
+}
