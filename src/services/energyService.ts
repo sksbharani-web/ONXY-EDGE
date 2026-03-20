@@ -6,9 +6,6 @@ const DATA_REF = 'ONXY_EDGE_1';
 const COMMAND_REF = 'ONXY_EDGE_1/Command';
 const STATE_REF = 'ONXY_EDGE_1/State';
 
-// Active-LOW relay: LOW ("OFF" command) = relay ON, HIGH ("ON" command) = relay OFF
-// We invert commands and state on the website side so the UI stays intuitive
-
 // Monitor connection state
 if (database) {
   const connectedRef = ref(database, ".info/connected");
@@ -92,8 +89,7 @@ export const subscribeToControlState = (
   return onValue(stateRef, (snapshot) => {
     const state = snapshot.val();
     console.log("📥 Received relay state:", state);
-    // Active-LOW inversion: ESP32 reports "OFF" when pin is LOW, but relay is actually ON
-    callback(state === "OFF");
+    callback(state === "ON");
   }, (error) => {
     console.error("🔥 Control Subscription Error:", error);
     if (onError) onError(error);
@@ -105,8 +101,7 @@ export const setSystemState = async (isOn: boolean) => {
   if (!database) throw new Error("Firebase not initialized");
   try {
     const commandRef = ref(database, COMMAND_REF);
-    // Active-LOW inversion: send "OFF" to set pin LOW (relay ON), "ON" to set pin HIGH (relay OFF)
-    await set(commandRef, isOn ? "OFF" : "ON");
+    await set(commandRef, isOn ? "ON" : "OFF");
 
     console.log(`🚀 Relay command sent: ${isOn ? "ON" : "OFF"}`);
   } catch (error: any) {

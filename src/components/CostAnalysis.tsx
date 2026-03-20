@@ -1,15 +1,39 @@
 import React from 'react';
 import { IndianRupee, TrendingUp, Calendar, Zap } from 'lucide-react';
-import { ELECTRICITY_RATE } from '@/types';
+import { EnergyReading, ELECTRICITY_RATE } from '@/types';
 
 interface CostAnalysisProps {
-  todayEnergy: number;   // kWh consumed today
-  monthEnergy: number;   // kWh consumed this month
-  yearEnergy: number;    // kWh consumed this year
+  history: EnergyReading[];
   currentPower: number;  // current power in watts
 }
 
-export function CostAnalysis({ todayEnergy, monthEnergy, yearEnergy, currentPower }: CostAnalysisProps) {
+export function CostAnalysis({ history, currentPower }: CostAnalysisProps) {
+  // Aggregate real energy usage from history by summing positive deltas to handle device resets gracefully
+  const calculateEnergySince = (sinceMs: number) => {
+    if (!history || history.length < 2) return 0;
+    const recentHistory = history.filter(r => r.timestamp >= sinceMs);
+    if (recentHistory.length < 2) return 0;
+
+    let totalGenerated = 0;
+    for (let i = 1; i < recentHistory.length; i++) {
+      const delta = recentHistory[i].energy - recentHistory[i - 1].energy;
+      // Only sum positive, reasonable deltas (ignore massive spikes or negative resets)
+      if (delta > 0 && delta < 500) {
+        totalGenerated += delta;
+      }
+    }
+    return totalGenerated;
+  };
+
+  const now = Date.now();
+  const startOfDay = new Date().setHours(0, 0, 0, 0);
+  const startOfMonth = now - (30 * 24 * 60 * 60 * 1000);
+  const startOfYear = now - (365 * 24 * 60 * 60 * 1000);
+
+  const todayEnergy = calculateEnergySince(startOfDay);
+  const monthEnergy = calculateEnergySince(startOfMonth);
+  const yearEnergy = calculateEnergySince(startOfYear);
+
   const todayCost = todayEnergy * ELECTRICITY_RATE;
   const monthCost = monthEnergy * ELECTRICITY_RATE;
   const yearCost = yearEnergy * ELECTRICITY_RATE;

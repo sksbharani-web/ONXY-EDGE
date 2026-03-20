@@ -53,7 +53,7 @@ export function EnergyChatbot({ currentReading, history }: EnergyChatbotProps) {
         ${JSON.stringify(recentHistory.map(r => ({ t: new Date(r.timestamp).toLocaleTimeString(), p: r.power })))}
       `;
 
-      const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY });
+      const ai = new GoogleGenAI({ apiKey: import.meta.env.VITE_GEMINI_API_KEY });
       const chat = ai.chats.create({
         model: "gemini-2.5-flash",
         config: {
@@ -114,7 +114,7 @@ export function EnergyChatbot({ currentReading, history }: EnergyChatbotProps) {
             <Sparkles className="text-blue-600 dark:text-blue-400" size={20} />
           </div>
           <div>
-            <h3 className="font-semibold text-slate-800 dark:text-slate-100">EnergyPulse AI</h3>
+            <h3 className="font-semibold text-slate-800 dark:text-slate-100">ONXY EDGE</h3>
             <div className="flex items-center gap-1.5">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-500"></span>
               <p className="text-xs text-slate-500 dark:text-slate-400">Online</p>

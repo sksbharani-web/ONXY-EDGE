@@ -1,19 +1,20 @@
-import React, { useState, useMemo } from 'react';
-import { Download, FileJson, FileSpreadsheet, PieChart as PieChartIcon, Activity } from 'lucide-react';
+import React, { useState, useMemo, useRef } from 'react';
+import { motion, Variants } from 'framer-motion';
+import { Download, FileJson, FileSpreadsheet, Activity, FileText } from 'lucide-react';
 import { EnergyReading, TimeRange, ELECTRICITY_RATE } from '@/types';
 import { EnergyChart } from './EnergyChart';
-import { PieChart, Pie, Cell, ResponsiveContainer, Tooltip, Legend } from 'recharts';
 import { cn } from '@/lib/utils';
 
 interface AnalysisPageProps {
     history: EnergyReading[];
     timeRange: TimeRange;
     onTimeRangeChange: (range: TimeRange) => void;
+    onExportPDF: () => void;
 }
 
-const COLORS = ['#3b82f6', '#f59e0b', '#10b981', '#6366f1', '#ec4899'];
 
-export function AnalysisPage({ history, timeRange, onTimeRangeChange }: AnalysisPageProps) {
+
+export function AnalysisPage({ history, timeRange, onTimeRangeChange, onExportPDF }: AnalysisPageProps) {
     const [isExporting, setIsExporting] = useState(false);
 
     // Calculate stats
@@ -28,40 +29,19 @@ export function AnalysisPage({ history, timeRange, onTimeRangeChange }: Analysis
             if (r.power > peakPower) peakPower = r.power;
         });
 
-        const totalEnergy = history[history.length - 1]?.energy || 0;
+        const firstReading = history[0];
+        const lastReading = history[history.length - 1];
+        const totalEnergy = Math.max(0, (lastReading?.energy || 0) - (firstReading?.energy || 0));
+
         const totalCost = totalEnergy * ELECTRICITY_RATE;
+        const totalCarbon = history.reduce((acc, curr) => acc + (curr.carbonFootprint || 0), 0);
         const avgPower = sumPower / history.length;
+        const avgCurrent = history.reduce((acc, curr) => acc + curr.current, 0) / history.length;
 
-        return { totalEnergy, totalCost, avgPower, peakPower };
+        return { totalEnergy, totalCost, totalCarbon, avgPower, peakPower, avgCurrent };
     }, [history]);
 
-    // Aggregate data for Pie Chart (Real Distribution based on data signatures)
-    const pieData = useMemo(() => {
-        if (!history || history.length === 0) return [];
 
-        let standby = 0; // < 50W
-        let lighting = 0; // 50W - 200W
-        let appliances = 0; // 200W - 1000W
-        let hvac = 0; // > 1000W
-
-        history.forEach(r => {
-            const p = r.power;
-            if (p < 50) standby += p;
-            else if (p < 200) lighting += p;
-            else if (p < 1000) appliances += p;
-            else hvac += p;
-        });
-
-        const totalAnalyzed = standby + lighting + appliances + hvac;
-        if (totalAnalyzed === 0) return [];
-
-        return [
-            { name: 'HVAC / Cooling', value: hvac },
-            { name: 'Lighting & Fans', value: lighting },
-            { name: 'Appliances', value: appliances },
-            { name: 'Standby / Low Power', value: standby },
-        ].filter(item => item.value > 0);
-    }, [history]);
 
     // Calculate Efficiency Score based on the ratio of low-power to high-power usage times.
     const efficiencyScore = useMemo(() => {
@@ -122,11 +102,33 @@ export function AnalysisPage({ history, timeRange, onTimeRangeChange }: Analysis
         }
     };
 
+    const chartRef = useRef<HTMLDivElement>(null);
+
+
+
+    const containerVariants: Variants = {
+        hidden: { opacity: 0 },
+        show: {
+            opacity: 1,
+            transition: { staggerChildren: 0.1 }
+        }
+    };
+
+    const itemVariants: Variants = {
+        hidden: { opacity: 0, y: 20 },
+        show: { opacity: 1, y: 0, transition: { duration: 0.5, ease: "easeOut" } }
+    };
+
     return (
-        <div className="space-y-6 animate-in fade-in slide-in-from-bottom-4 duration-500">
+        <motion.div
+            variants={containerVariants}
+            initial="hidden"
+            animate="show"
+            className="space-y-6"
+        >
 
             {/* Header & Actions */}
-            <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-slate-900/40 p-6 rounded-[20px] border border-slate-100/80 dark:border-slate-800/60 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] backdrop-blur-xl transition-colors">
+            <motion.div variants={itemVariants} className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 bg-white dark:bg-slate-900/40 p-6 rounded-[20px] border border-slate-100/80 dark:border-slate-800/60 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] backdrop-blur-xl transition-colors hover:shadow-md">
                 <div>
                     <h2 className="text-2xl font-bold bg-clip-text text-transparent bg-gradient-to-r from-slate-800 to-slate-500 dark:from-white dark:to-slate-400">
                         Data Analysis
@@ -137,6 +139,14 @@ export function AnalysisPage({ history, timeRange, onTimeRangeChange }: Analysis
                 </div>
 
                 <div className="flex items-center gap-3">
+                    <button
+                        onClick={onExportPDF}
+                        disabled={isExporting || history.length === 0}
+                        className="flex items-center gap-2 px-4 py-2 bg-rose-50 dark:bg-rose-500/10 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-500/20 rounded-xl text-sm font-semibold transition-colors disabled:opacity-50"
+                    >
+                        <FileText size={16} />
+                        PDF
+                    </button>
                     <button
                         onClick={exportCSV}
                         disabled={isExporting || history.length === 0}
@@ -154,94 +164,75 @@ export function AnalysisPage({ history, timeRange, onTimeRangeChange }: Analysis
                         JSON
                     </button>
                 </div>
-            </div>
+            </motion.div>
 
             {/* Main Charts area */}
-            <div className="grid grid-cols-1 lg:grid-cols-3 gap-6">
+            <div className="space-y-6">
 
-                {/* Left Col: Main Timeline Chart */}
-                <div className="lg:col-span-2 h-[450px]">
+                {/* Full-width Timeline Chart */}
+                <motion.div variants={itemVariants} className="h-[450px] p-4 bg-white dark:bg-slate-900/40 rounded-[20px] border border-slate-100/80 dark:border-slate-800/60 shadow-sm" ref={chartRef}>
                     <EnergyChart data={history} timeRange={timeRange} onTimeRangeChange={onTimeRangeChange} />
-                </div>
+                </motion.div>
 
-                {/* Right Col: Distribution & Stats */}
-                <div className="lg:col-span-1 space-y-6">
-
-                    {/* Pie Chart */}
-                    <div className="bg-white dark:bg-slate-900/40 p-6 rounded-[20px] border border-slate-100/80 dark:border-slate-800/60 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] backdrop-blur-xl flex flex-col h-[280px] transition-colors">
-                        <div className="flex items-center gap-2 mb-2">
-                            <PieChartIcon className="w-5 h-5 text-indigo-500" />
-                            <h3 className="font-semibold text-slate-800 dark:text-slate-100">Load Category Breakdown</h3>
-                        </div>
-                        <p className="text-xs text-slate-500 dark:text-slate-400 mb-4">Inferred from real-time wattage signatures</p>
-
-                        <div className="flex-1 min-h-0">
-                            {pieData.length > 0 ? (
-                                <ResponsiveContainer width="100%" height="100%">
-                                    <PieChart>
-                                        <Pie
-                                            data={pieData}
-                                            cx="50%"
-                                            cy="50%"
-                                            innerRadius={40}
-                                            outerRadius={70}
-                                            paddingAngle={5}
-                                            dataKey="value"
-                                            stroke="none"
-                                        >
-                                            {pieData.map((entry, index) => (
-                                                <Cell key={`cell-${index}`} fill={COLORS[index % COLORS.length]} />
-                                            ))}
-                                        </Pie>
-                                        <Tooltip
-                                            formatter={(value: number) => [`${value.toFixed(1)} W`, 'Power']}
-                                            contentStyle={{ borderRadius: '12px', border: 'none', boxShadow: '0 4px 12px rgba(0,0,0,0.1)' }}
-                                        />
-                                        <Legend iconType="circle" wrapperStyle={{ fontSize: '11px' }} />
-                                    </PieChart>
-                                </ResponsiveContainer>
-                            ) : (
-                                <div className="h-full flex items-center justify-center text-slate-400 text-sm">
-                                    Not enough data collected
-                                </div>
-                            )}
-                        </div>
-                    </div>
+                <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
 
                     {/* Quick Stats Summary */}
-                    <div className="bg-white dark:bg-slate-900/40 p-6 rounded-[20px] border border-slate-100/80 dark:border-slate-800/60 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] backdrop-blur-xl transition-colors">
+                    <motion.div variants={itemVariants} className="bg-white dark:bg-slate-900/40 p-6 rounded-[20px] border border-slate-100/80 dark:border-slate-800/60 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] backdrop-blur-xl transition-colors hover:shadow-md">
                         <div className="flex items-center gap-2 mb-4">
                             <Activity className="w-5 h-5 text-emerald-500" />
                             <h3 className="font-semibold text-slate-800 dark:text-slate-100">Performance Metrics</h3>
                         </div>
 
                         <div className="space-y-4">
-                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800">
+                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 p-2 rounded-lg transition-colors">
                                 <span className="text-sm text-slate-500 dark:text-slate-400">Peak Load Recorded</span>
                                 <span className="font-semibold text-rose-500">{stats.peakPower.toFixed(1)} W</span>
                             </div>
-                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800">
+                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 p-2 rounded-lg transition-colors">
                                 <span className="text-sm text-slate-500 dark:text-slate-400">Average Load</span>
                                 <span className="font-semibold text-blue-500">{stats.avgPower.toFixed(1)} W</span>
                             </div>
-                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800">
+                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 p-2 rounded-lg transition-colors">
                                 <span className="text-sm text-slate-500 dark:text-slate-400">Total Energy (Session)</span>
                                 <span className="font-semibold text-emerald-500">{stats.totalEnergy.toFixed(3)} kWh</span>
                             </div>
-                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800">
+                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 p-2 rounded-lg transition-colors">
                                 <span className="text-sm text-slate-500 dark:text-slate-400">Efficiency Score</span>
                                 <span className="font-semibold text-indigo-500">{efficiencyScore}/100</span>
                             </div>
-                            <div className="flex justify-between items-center">
+                        </div>
+                    </motion.div>
+
+                    {/* Cost and Carbon Extended metrics */}
+                    <motion.div variants={itemVariants} className="bg-white dark:bg-slate-900/40 p-6 rounded-[20px] border border-slate-100/80 dark:border-slate-800/60 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] backdrop-blur-xl transition-colors hover:shadow-md">
+                        <div className="flex items-center gap-2 mb-4">
+                            <Activity className="w-5 h-5 text-amber-500" />
+                            <h3 className="font-semibold text-slate-800 dark:text-slate-100">Cost & Environmental Impact</h3>
+                        </div>
+
+                        <div className="space-y-4">
+                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 p-2 rounded-lg transition-colors">
                                 <span className="text-sm text-slate-500 dark:text-slate-400">Total Cost (Session)</span>
                                 <span className="font-semibold text-amber-500">₹{stats.totalCost.toFixed(2)}</span>
                             </div>
+                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 p-2 rounded-lg transition-colors">
+                                <span className="text-sm text-slate-500 dark:text-slate-400">Carbon Footprint</span>
+                                <span className="font-semibold text-teal-500">{stats.totalCarbon.toFixed(3)} kg CO₂</span>
+                            </div>
+                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 p-2 rounded-lg transition-colors">
+                                <span className="text-sm text-slate-500 dark:text-slate-400">Average Current</span>
+                                <span className="font-semibold text-purple-500">{stats.avgCurrent.toFixed(2)} A</span>
+                            </div>
+                            <div className="flex justify-between items-center pb-3 border-b border-slate-100 dark:border-slate-800 hover:bg-slate-50 dark:hover:bg-slate-800/50 p-2 rounded-lg transition-colors">
+                                <span className="text-sm text-slate-500 dark:text-slate-400">Electricity Rate</span>
+                                <span className="font-semibold text-slate-500">₹{ELECTRICITY_RATE}/kWh</span>
+                            </div>
                         </div>
-                    </div>
+                    </motion.div>
 
                 </div>
             </div>
 
-        </div>
+        </motion.div>
     );
 }

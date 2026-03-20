@@ -1,5 +1,8 @@
-import React, { useState, useEffect } from 'react';
-import { Zap, Activity, Battery, Power, Clock, Cpu } from 'lucide-react';
+import React, { useState, useEffect, useRef } from 'react';
+import { Zap, Activity, Battery, Power, Clock, Cpu, Download } from 'lucide-react';
+import jsPDF from 'jspdf';
+import { motion, AnimatePresence, Variants } from 'framer-motion';
+import { ExportPDFModal } from '@/components/ExportPDFModal';
 import { NewMetricCard } from '@/components/NewMetricCard';
 import { EnergyChatbot } from '@/components/EnergyChatbot';
 import { AIInsights } from '@/components/AIInsights';
@@ -12,11 +15,11 @@ import { TopBar } from '@/components/TopBar';
 import { CostAnalysis } from '@/components/CostAnalysis';
 import { CarbonFootprint } from '@/components/CarbonFootprint';
 import { WeatherWidget } from '@/components/WeatherWidget';
+import { BottomNav } from '@/components/BottomNav';
 import { UserSettings } from '@/components/UserSettings';
 import { IntroPage } from '@/components/IntroPage';
 import { LoginPage } from '@/components/LoginPage';
 import { AnalysisPage } from '@/components/AnalysisPage';
-import { generateReading, generateHistory } from '@/services/simulation';
 import { subscribeToLatestReading, subscribeToHistory, subscribeToControlState, setSystemState } from '@/services/energyService';
 import { requestNotificationPermission, onMessageListener } from '@/services/notificationService';
 import { EnergyReading, TimeRange, WeatherData } from '@/types';
@@ -30,6 +33,9 @@ import { Logo } from '@/components/Logo';
 type AppPage = 'intro' | 'login' | 'dashboard';
 
 function App() {
+  // Mobile sidebar state
+  const [isMobileMenuOpen, setIsMobileMenuOpen] = useState(false);
+
   // Page routing state
   const [currentPage, setCurrentPage] = useState<AppPage>(() => {
     // If user was previously authenticated, skip intro
@@ -62,8 +68,10 @@ function App() {
     }
   }, [isUserLoaded, user]);
 
-  // App State
   const [activeTab, setActiveTab] = useState('dashboard');
+  const dashboardRef = useRef<HTMLDivElement>(null);
+  const [isExportingDashboard, setIsExportingDashboard] = useState(false);
+  const relayCooldownRef = useRef(false);
   const [isOn, setIsOn] = useState(true);
   const [currentReading, setCurrentReading] = useState<EnergyReading | null>(null);
   const [history, setHistory] = useState<EnergyReading[]>([]);
@@ -102,6 +110,7 @@ function App() {
   const [showAlerts, setShowAlerts] = useState(false);
   const [isConnecting, setIsConnecting] = useState(false);
   const [connectionStatus, setConnectionStatus] = useState<'connected' | 'disconnected' | 'error'>('disconnected');
+  const [showPdfModal, setShowPdfModal] = useState(false);
 
   // Load settings
   useEffect(() => {
@@ -208,7 +217,7 @@ function App() {
           setCurrentReading(reading);
           setHistory(prev => {
             const newHistory = [...prev, reading];
-            if (newHistory.length > 2000) return newHistory.slice(-2000);
+            if (newHistory.length > 50000) return newHistory.slice(-50000);
             return newHistory;
           });
         }
@@ -219,7 +228,10 @@ function App() {
       });
 
       const unsubscribeControl = subscribeToControlState((state) => {
-        setIsOn(state);
+        // Skip Firebase state updates during cooldown (after user toggle)
+        if (!relayCooldownRef.current) {
+          setIsOn(state);
+        }
       });
 
       return () => {
@@ -227,65 +239,24 @@ function App() {
         unsubscribeHistory();
         unsubscribeControl();
       };
-    } else if (espIp) {
-      const pollDevice = async () => {
-        try {
-          setConnectionStatus('connected');
-          const newReading = generateReading(isOn);
-          setCurrentReading(newReading);
-          setHistory(prev => {
-            const newHistory = [...prev, newReading];
-            if (newHistory.length > 2000) return newHistory.slice(-2000);
-            return newHistory;
-          });
-        } catch (err) {
-          setConnectionStatus('error');
-        }
-      };
-      const interval = setInterval(pollDevice, 2000);
-      return () => clearInterval(interval);
     } else {
-      const initialHistory = generateHistory(24 * 30);
-      setHistory(initialHistory);
-      setCurrentReading(initialHistory[initialHistory.length - 1]);
-      const interval = setInterval(() => {
-        const newReading = generateReading(isOn);
-        setCurrentReading(newReading);
-        setHistory(prev => {
-          const newHistory = [...prev, newReading];
-          if (newHistory.length > 2000) return newHistory.slice(-2000);
-          return newHistory;
-        });
-      }, 2000);
-      return () => clearInterval(interval);
+      setConnectionStatus('disconnected');
     }
-  }, [useFirebase, isOn, espIp]);
+  }, [useFirebase, isOn]);
 
-  const togglePower = async () => {
+  const togglePower = () => {
     const newState = !isOn;
+    // Instant UI update (optimistic) + block incoming state for 4s
+    setIsOn(newState);
+    relayCooldownRef.current = true;
+    setTimeout(() => { relayCooldownRef.current = false; }, 4000);
+
     if (useFirebase) {
-      setIsConnecting(true);
-      try {
-        await setSystemState(newState);
-      } catch (err) {
-        console.error("Firebase write failed", err);
-      } finally {
-        setIsConnecting(false);
-      }
-    } else {
-      setIsOn(newState);
-      if (espIp) {
-        setIsConnecting(true);
-        try {
-          await new Promise(resolve => setTimeout(resolve, 500));
-          setConnectionStatus('connected');
-        } catch (err) {
-          setConnectionStatus('error');
-          setIsOn(!newState);
-        } finally {
-          setIsConnecting(false);
-        }
-      }
+      setSystemState(newState).catch((err) => {
+        console.error("Firebase write failed — reverting", err);
+        relayCooldownRef.current = false;
+        setIsOn(!newState);
+      });
     }
   };
 
@@ -360,122 +331,170 @@ function App() {
   const userEmail = user?.primaryEmailAddress?.emailAddress || '';
   const userName = user?.fullName || user?.firstName || (userEmail ? userEmail.split('@')[0] : 'Guest User');
 
+  const itemVariants: Variants = {
+    hidden: { opacity: 0, y: 20 },
+    show: { opacity: 1, y: 0, transition: { type: "spring", stiffness: 300, damping: 24 } }
+  };
+
   // Dashboard content
   const renderDashboard = () => (
-    <>
-      <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-5 gap-4">
-        <NewMetricCard
-          label="Voltage"
-          value={currentReading?.voltage.toFixed(1) || "0.0"}
-          unit="V"
-          icon={Activity}
-          color="text-blue-500"
-          bgColor="bg-blue-50 dark:bg-blue-900/20"
-          progress={((currentReading?.voltage || 0) / 240) * 100}
-        />
-        <NewMetricCard
-          label="Current"
-          value={currentReading?.current.toFixed(2) || "0.00"}
-          unit="A"
-          icon={Zap}
-          color="text-purple-500"
-          bgColor="bg-purple-50 dark:bg-purple-900/20"
-          progress={((currentReading?.current || 0) / 15) * 100}
-        />
-        <NewMetricCard
-          label="Power"
-          value={currentReading?.power.toFixed(1) || "0.0"}
-          unit="W"
-          icon={Battery}
-          color="text-amber-500"
-          bgColor="bg-amber-50 dark:bg-amber-900/20"
-          progress={((currentReading?.power || 0) / 3000) * 100}
-        />
-        <NewMetricCard
-          label="Energy"
-          value={currentReading?.energy.toFixed(3) || "0.000"}
-          unit="kWh"
-          icon={Clock}
-          color="text-emerald-500"
-          bgColor="bg-emerald-50 dark:bg-emerald-900/20"
-        />
-
-        <div className="bg-white dark:bg-slate-900/40 p-5 rounded-[20px] border border-slate-100/80 dark:border-slate-800/60 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] backdrop-blur-xl flex flex-col justify-between transition-colors">
-          <div className="flex justify-between items-start">
-            <div>
-              <p className="text-sm font-medium text-slate-500 dark:text-slate-400">Relay Status</p>
-              <h3 className={cn("text-2xl font-bold tracking-tight mt-1", isOn ? "text-emerald-500 dark:text-emerald-400" : "text-rose-500 dark:text-rose-400")}>
-                {isOn ? "ON" : "OFF"}
-              </h3>
-            </div>
-            <div className={cn("w-10 h-10 rounded-2xl flex items-center justify-center transition-colors", isOn ? "bg-emerald-50 dark:bg-emerald-900/20" : "bg-rose-50 dark:bg-rose-900/20")}>
-              <Power className={cn("w-5 h-5", isOn ? "text-emerald-500 dark:text-emerald-400" : "text-rose-500 dark:text-rose-400")} />
-            </div>
-          </div>
-          <button
-            onClick={togglePower}
-            disabled={isConnecting}
-            className={cn(
-              "w-full py-2 rounded-lg text-sm font-semibold transition-all mt-4",
-              isOn
-                ? "bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/40"
-                : "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
-            )}
-          >
-            {isConnecting ? "Syncing..." : isOn ? "Turn Off" : "Turn On"}
-          </button>
-        </div>
+    <motion.div
+      initial="hidden"
+      animate="show"
+      variants={{
+        hidden: { opacity: 0 },
+        show: { opacity: 1, transition: { staggerChildren: 0.1 } }
+      }}
+      className="space-y-6"
+    >
+      <div className="flex justify-end mb-2">
+        <button
+          onClick={() => setShowPdfModal(true)}
+          className="flex items-center gap-1.5 sm:gap-2 px-3 sm:px-4 py-1.5 sm:py-2 bg-blue-50 dark:bg-blue-500/10 text-blue-600 dark:text-blue-400 hover:bg-blue-100 dark:hover:bg-blue-500/20 rounded-xl text-xs sm:text-sm font-semibold transition-all active:scale-95 shadow-sm"
+        >
+          <Download className="w-3.5 h-3.5 sm:w-4 sm:h-4" />
+          Export PDF
+        </button>
       </div>
 
-      <div className="grid grid-cols-1 md:grid-cols-2 xl:grid-cols-4 gap-6">
-        <AIInsights currentReading={currentReading} history={history} weather={weather} />
+      <div ref={dashboardRef} className="space-y-3 sm:space-y-4 md:space-y-6">
+        {/* Metric Cards — 2 cols on mobile, 3 on md, 5 on lg */}
+        <div className="grid grid-cols-2 sm:grid-cols-2 md:grid-cols-3 lg:grid-cols-5 gap-2.5 sm:gap-3 md:gap-4">
+          <motion.div variants={itemVariants}>
+            <NewMetricCard
+              label="Voltage"
+              value={currentReading?.voltage.toFixed(1) || "0.0"}
+              unit="V"
+              icon={Activity}
+              color="text-blue-500"
+              bgColor="bg-blue-50 dark:bg-blue-900/20"
+              progress={((currentReading?.voltage || 0) / 240) * 100}
+            />
+          </motion.div>
+          <motion.div variants={itemVariants}>
+            <NewMetricCard
+              label="Current"
+              value={currentReading?.current.toFixed(2) || "0.00"}
+              unit="A"
+              icon={Zap}
+              color="text-purple-500"
+              bgColor="bg-purple-50 dark:bg-purple-900/20"
+              progress={((currentReading?.current || 0) / 15) * 100}
+            />
+          </motion.div>
+          <motion.div variants={itemVariants}>
+            <NewMetricCard
+              label="Power"
+              value={currentReading?.power.toFixed(1) || "0.0"}
+              unit="W"
+              icon={Battery}
+              color="text-amber-500"
+              bgColor="bg-amber-50 dark:bg-amber-900/20"
+              progress={((currentReading?.power || 0) / 3000) * 100}
+            />
+          </motion.div>
+          <motion.div variants={itemVariants}>
+            <NewMetricCard
+              label="Energy"
+              value={currentReading?.energy.toFixed(3) || "0.000"}
+              unit="kWh"
+              icon={Clock}
+              color="text-emerald-500"
+              bgColor="bg-emerald-50 dark:bg-emerald-900/20"
+            />
+          </motion.div>
 
-        <div className="xl:col-span-1 h-full min-h-[300px]">
-          <CostAnalysis
-            todayEnergy={currentReading?.energy || 0}
-            monthEnergy={(currentReading?.energy || 0) * 30}
-            yearEnergy={(currentReading?.energy || 0) * 365}
-            currentPower={currentReading?.power || 0}
-          />
+          {/* Relay Card — responsive */}
+          <motion.div variants={itemVariants} className="col-span-2 sm:col-span-2 md:col-span-3 lg:col-span-1 bg-white dark:bg-slate-900/40 p-3 sm:p-4 md:p-5 rounded-2xl sm:rounded-[20px] border border-slate-100/80 dark:border-slate-800/60 shadow-[0_2px_10px_-4px_rgba(0,0,0,0.05)] backdrop-blur-xl flex flex-col justify-between transition-colors">
+            <div className="flex justify-between items-start">
+              <div>
+                <p className="text-xs sm:text-sm font-medium text-slate-500 dark:text-slate-400">Relay Status</p>
+                <h3 className={cn("text-lg sm:text-xl md:text-2xl font-bold tracking-tight mt-0.5 sm:mt-1", isOn ? "text-emerald-500 dark:text-emerald-400" : "text-rose-500 dark:text-rose-400")}>
+                  {isOn ? "ON" : "OFF"}
+                </h3>
+              </div>
+              <div className={cn("w-8 h-8 sm:w-9 sm:h-9 md:w-10 md:h-10 rounded-xl sm:rounded-2xl flex items-center justify-center transition-colors", isOn ? "bg-emerald-50 dark:bg-emerald-900/20" : "bg-rose-50 dark:bg-rose-900/20")}>
+                <Power className={cn("w-4 h-4 sm:w-5 sm:h-5", isOn ? "text-emerald-500 dark:text-emerald-400" : "text-rose-500 dark:text-rose-400")} />
+              </div>
+            </div>
+            <button
+              onClick={togglePower}
+              disabled={isConnecting}
+              className={cn(
+                "w-full py-1.5 sm:py-2 rounded-lg text-xs sm:text-sm font-semibold transition-all active:scale-[0.97] mt-2 sm:mt-4",
+                isOn
+                  ? "bg-rose-50 dark:bg-rose-900/20 text-rose-600 dark:text-rose-400 hover:bg-rose-100 dark:hover:bg-rose-900/40"
+                  : "bg-emerald-50 dark:bg-emerald-900/20 text-emerald-600 dark:text-emerald-400 hover:bg-emerald-100 dark:hover:bg-emerald-900/40"
+              )}
+            >
+              {isConnecting ? "Syncing..." : isOn ? "Turn Off" : "Turn On"}
+            </button>
+          </motion.div>
         </div>
 
-        <div className="xl:col-span-1 h-full min-h-[300px]">
-          <CarbonFootprint
-            totalEnergy={currentReading?.energy || 0}
-            realtimeCarbon={currentReading?.carbonFootprint || 0}
-            currentPower={currentReading?.power || 0}
-          />
+        {/* Row 2: Cost, Carbon, Weather — stacks on mobile, 3-col on md+ */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 md:grid-cols-3 gap-3 sm:gap-4 md:gap-6">
+          <motion.div variants={itemVariants} className="h-full min-h-[240px] sm:min-h-[280px] md:min-h-[300px]">
+            <CostAnalysis
+              history={history}
+              currentPower={currentReading?.power || 0}
+            />
+          </motion.div>
+
+          <motion.div variants={itemVariants} className="h-full min-h-[240px] sm:min-h-[280px] md:min-h-[300px]">
+            <CarbonFootprint
+              totalEnergy={currentReading?.energy || 0}
+              realtimeCarbon={currentReading?.carbonFootprint || 0}
+              currentPower={currentReading?.power || 0}
+            />
+          </motion.div>
+
+          <motion.div variants={itemVariants} className="h-full min-h-[240px] sm:min-h-[280px] md:min-h-[300px] sm:col-span-2 md:col-span-1">
+            <WeatherWidget
+              weather={weather}
+              location={location}
+              searchQuery={searchQuery}
+              onSearchQueryChange={setSearchQuery}
+              onSearch={handleWeatherSearch}
+              onUseCurrentLocation={handleUseCurrentLocation}
+              onRefresh={() => fetchWeather(location.latitude, location.longitude)}
+              loading={loadingWeather}
+              isSearching={isSearchingWeather}
+              error={weatherError}
+            />
+          </motion.div>
         </div>
 
-        <div className="xl:col-span-1 h-full min-h-[300px]">
-          <WeatherWidget
-            weather={weather}
-            location={location}
-            searchQuery={searchQuery}
-            onSearchQueryChange={setSearchQuery}
-            onSearch={handleWeatherSearch}
-            onUseCurrentLocation={handleUseCurrentLocation}
-            onRefresh={() => fetchWeather(location.latitude, location.longitude)}
-            loading={loadingWeather}
-            isSearching={isSearchingWeather}
-            error={weatherError}
-          />
-        </div>
+        {/* Row 3: AI Insights — full width */}
+        <motion.div variants={itemVariants} className="w-full">
+          <AIInsights currentReading={currentReading} history={history} weather={weather} />
+        </motion.div>
       </div>
-    </>
+    </motion.div >
   );
 
   // Layout wrapper
   const renderLayout = (content: React.ReactNode, onLogoutFn: () => void, email: string, name: string, banner?: React.ReactNode) => (
     <div className="flex h-screen bg-slate-50 dark:bg-slate-950 font-sans text-slate-900 dark:text-slate-50 transition-colors duration-300">
-      <Sidebar activeTab={activeTab} onTabChange={setActiveTab} onLogout={onLogoutFn} userEmail={email} userName={name} />
-      <div className="flex-1 ml-64 flex flex-col h-screen overflow-hidden">
-        <TopBar userEmail={email} userName={name} />
-        <main className="flex-1 overflow-y-auto p-6 space-y-6">
+      <Sidebar
+        activeTab={activeTab}
+        onTabChange={setActiveTab}
+        onLogout={onLogoutFn}
+        userEmail={email}
+        userName={name}
+        onOpenDeviceSettings={() => setShowSettings(true)}
+        onOpenHardwareGuide={() => setShowHardwareGuide(true)}
+        isMobileOpen={isMobileMenuOpen}
+        onMobileClose={() => setIsMobileMenuOpen(false)}
+      />
+      <div className="flex-1 flex flex-col h-screen overflow-hidden bg-slate-50/50 dark:bg-[#0a0f1c]">
+        <TopBar userEmail={email} userName={name} activeTab={activeTab} onMenuClick={() => setIsMobileMenuOpen(true)} />
+        <main className="flex-1 overflow-y-auto p-3 sm:p-4 md:p-6 xl:p-8 space-y-4 sm:space-y-6 pb-20 lg:pb-6 xl:pb-8">
           {banner}
           {content}
         </main>
       </div>
+      <BottomNav activeTab={activeTab} onTabChange={setActiveTab} onMenuClick={() => setIsMobileMenuOpen(true)} />
       <EnergyChatbot currentReading={currentReading} history={history} />
       <HardwareGuide isOpen={showHardwareGuide} onClose={() => setShowHardwareGuide(false)} />
       <DeviceSettings
@@ -485,6 +504,7 @@ function App() {
         currentIp={espIp}
       />
       <EnergyAlerts isOpen={showAlerts} onClose={() => setShowAlerts(false)} currentReading={currentReading} />
+      <ExportPDFModal isOpen={showPdfModal} onClose={() => setShowPdfModal(false)} history={history} userName={userName} />
       <ConfigDebug />
     </div>
   );
@@ -516,7 +536,58 @@ function App() {
           history={history}
           timeRange={timeRange}
           onTimeRangeChange={setTimeRange}
+          onExportPDF={() => setShowPdfModal(true)}
         />
+      )}
+      {activeTab === 'chatbot' && (
+        <div className="flex flex-col items-center justify-center h-[60vh] text-center max-w-lg mx-auto">
+          <div className="w-20 h-20 bg-blue-50 dark:bg-blue-900/20 rounded-full flex items-center justify-center mb-6">
+            <span className="text-4xl">🤖</span>
+          </div>
+          <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-3">AI Assistant</h2>
+          <p className="text-slate-500 dark:text-slate-400 mb-6">
+            Use the floating chatbot widget in the bottom right corner to interact with the AI assistant from any page.
+          </p>
+        </div>
+      )}
+      {activeTab === 'weather' && (
+        <div className="max-w-3xl mx-auto h-[60vh]">
+          <WeatherWidget
+            weather={weather}
+            location={location}
+            searchQuery={searchQuery}
+            onSearchQueryChange={setSearchQuery}
+            onSearch={handleWeatherSearch}
+            onUseCurrentLocation={handleUseCurrentLocation}
+            onRefresh={() => fetchWeather(location.latitude, location.longitude)}
+            loading={loadingWeather}
+            isSearching={isSearchingWeather}
+            error={weatherError}
+          />
+        </div>
+      )}
+      {activeTab === 'carbon' && (
+        <div className="max-w-3xl mx-auto h-[60vh]">
+          <CarbonFootprint
+            totalEnergy={currentReading?.energy || 0}
+            realtimeCarbon={currentReading?.carbonFootprint || 0}
+            currentPower={currentReading?.power || 0}
+          />
+        </div>
+      )}
+      {activeTab === 'reports' && (
+        <div className="flex flex-col items-center justify-center h-[60vh] text-center max-w-lg mx-auto">
+          <div className="w-20 h-20 bg-emerald-50 dark:bg-emerald-900/20 rounded-full flex items-center justify-center mb-6">
+            <span className="text-4xl">📊</span>
+          </div>
+          <h2 className="text-2xl font-bold text-slate-800 dark:text-slate-100 mb-3">Export Reports</h2>
+          <p className="text-slate-500 dark:text-slate-400 mb-6">
+            Navigate to the "System Dynamics" tab to view detailed metrics and export reports to PDF, CSV, or JSON.
+          </p>
+          <button onClick={() => setActiveTab('analysis')} className="px-6 py-2.5 bg-blue-600 text-white rounded-xl font-medium shadow-lg shadow-blue-500/30 hover:bg-blue-700 transition-colors">
+            Go to System Dynamics
+          </button>
+        </div>
       )}
       {activeTab === 'alerts' && (
         <div className="space-y-6">
